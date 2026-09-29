@@ -3,6 +3,7 @@
 #include <NimBLEDevice.h>
 
 #include "bike.h"
+#include "settings.h"
 
 namespace ftms {
 
@@ -64,9 +65,11 @@ void begin(const char* deviceName) {
 
   NimBLEService* svc = server->createService(NimBLEUUID(SVC_FTMS));
 
-  // Features: cadence, total distance, expended energy, elapsed time, power.
+  // Features: cadence, total distance, resistance level, expended energy,
+  // elapsed time, power.
   uint8_t feature[8] = {0};
-  uint32_t f = (1 << 1) | (1 << 2) | (1 << 9) | (1 << 12) | (1 << 14);
+  uint32_t f =
+      (1 << 1) | (1 << 2) | (1 << 7) | (1 << 9) | (1 << 12) | (1 << 14);
   memcpy(feature, &f, 4);
   NimBLECharacteristic* feat = svc->createCharacteristic(
       NimBLEUUID(CHR_FEATURE), NIMBLE_PROPERTY::READ);
@@ -99,9 +102,11 @@ void update() {
 
   const BikeState& s = bike::state();
 
-  // Flags: speed (implicit), cadence, total distance, power, energy, time.
-  const uint16_t flags = (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 11);
-  uint8_t buf[18];
+  // Flags: speed (implicit), cadence, total distance, resistance level,
+  // power, energy, time.
+  const uint16_t flags =
+      (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 11);
+  uint8_t buf[20];
   uint8_t* p = buf;
   put16(p, flags);
   put16(p, (uint16_t)(s.speedKmh * 100.0f));  // 0.01 km/h
@@ -110,6 +115,7 @@ void update() {
   *p++ = meters & 0xFF;
   *p++ = (meters >> 8) & 0xFF;
   *p++ = (meters >> 16) & 0xFF;
+  put16(p, settings.level);               // knob level, unitless
   put16(p, (uint16_t)(int16_t)s.powerW);  // W
   put16(p, (uint16_t)s.kcal);             // total kcal
   put16(p, 0xFFFF);                       // kcal/h: not available
