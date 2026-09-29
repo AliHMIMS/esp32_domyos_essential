@@ -77,8 +77,9 @@ void update() {
   if (moving) elapsedMs += dt;
 
   // Leg-ergometer estimate: VO2 (ml/kg/min) = 7 + 10.8 * W/kg,
-  // 1 L O2 ~ 5 kcal. powerK maps cadence to watts for the tension knob.
-  float power = settings.powerK * cadence * cadence;
+  // 1 L O2 ~ 5 kcal. powerK and the knob level's multiplier map cadence
+  // to watts.
+  float power = settings.powerK * settings.currentMult() * cadence * cadence;
   if (moving && cadence > 0) {
     float vo2 = 7.0f + 10.8f * power / settings.weightKg;
     float kcalPerMin = vo2 * settings.weightKg / 1000.0f * 5.0f;
