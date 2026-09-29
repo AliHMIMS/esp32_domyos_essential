@@ -174,31 +174,38 @@ wizard uses **effort matching** instead: the same effort means the same power,
 so if level 4 at 70 rpm feels as hard as level 6 at 57 rpm, level 6's
 multiplier is (70 ÷ 57)² = 1.51.
 
-### Running the wizard (about 25 minutes)
+### Running the wizard (about 18 minutes, hands-free)
 
-1. Warm up for 5 minutes. A heart-rate watch helps a lot: aim for the same
-   heart rate at every level. Without one, match your breathing.
+1. Warm up for 5 minutes. Turn the phone's sound up and set its screen to
+   stay on. A heart-rate watch helps a lot: keep the same heart rate the whole
+   time. Without one, keep the same breathing.
 2. Open **Settings → Knob levels → Calibrate levels**.
 3. Pick the **reference level**: the level you usually ride, and the one you
-   used for the calories in section B. Tap **Start**.
-4. For each step, turn the knob to the level shown (the wizard selects it in
-   the UI for you), settle for about a minute, then tap **Measure**. Hold
-   the pace for 60 seconds. If you stop pedalling, the measurement is
-   cancelled and you can retry.
-   - **First step:** ride the reference level at a steady pace you could
-     keep up for 20 minutes (around 60–75 rpm). That effort is the target.
-   - **Every other level:** change your pace until it feels the same:
-     faster on lighter levels, slower on heavier ones. Match the effort, not
-     the cadence. If a level can't be matched (e.g. level 1 would need a pace
-     you can't hold), tap **Skip level**. It will be estimated from its
-     neighbours.
-   - **Last step:** the reference level again. This fatigue check shows
-     whether your effort drifted over the session.
-5. Check the results table and tap **Save**, or **Discard**.
+   used for the calories in section B. It gets multiplier 1.0.
+4. Turn the knob to **1**, start pedalling and tap **Start on level 1**. From
+   here the page runs by itself:
+   - **Level 1 (about 2.5 min):** settle into a steady, moderate effort that
+     you could also hold on level 8 by pedalling slowly (about 80–90 rpm on
+     level 1). That effort is the target for every level. The last 60 s are
+     measured.
+   - **Levels 2 to 8 (about 2 min each):** two beeps and a voice say "Turn to
+     level N". Turn the knob within 10 s and keep the **same effort**, which
+     means pedalling slower on each heavier level. After 45 s to settle, a
+     short beep starts the 60 s measurement, and three ticks count down to the
+     next level. Match the effort, not the cadence.
+   - **Fatigue check:** back to level 1 at the same effort. This shows whether
+     your effort drifted over the session.
+5. A final beep and "Calibration done" mark the end. Check the results table
+   and tap **Save**, or **Discard**.
+
+If you stop pedalling during a measurement, the wizard says so and measures
+that level again after 20 s. **Skip level** moves on when a level can't be
+matched, and it's estimated from the levels on either side. **Pause** stops the
+timer; **Resume** restarts the current level.
 
 If the results warn that the fatigue check is off by more than 8 %, or that
 a heavier level came out lighter than the one below it, rest and redo the
-calibration (or just the levels concerned). You can also edit any
+calibration. You can also edit any
 multiplier by hand under **Settings → Knob levels**.
 
 ---
