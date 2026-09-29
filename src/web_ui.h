@@ -53,6 +53,12 @@ input[type=text],input[type=password]{text-align:left}
 .lv button.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .mults{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
 .mults label{font-size:12px;color:var(--muted)}
+select{font:inherit;width:100%;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+.res{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums;margin-top:4px}
+.res th,.res td{text-align:right;padding:6px 4px;border-top:1px solid var(--line)}
+.res th:first-child,.res td:first-child{text-align:left}
+.res th{color:var(--muted);font-weight:500;border-top:0}
+#wLive{padding:12px 0 0}
 </style>
 </head>
 <body>
@@ -119,7 +125,7 @@ input[type=text],input[type=password]{text-align:left}
     <form id="fLvl">
       <p class="help">Power multiplier for each level, relative to the reference level (1.0). Power = power factor × multiplier × rpm².</p>
       <div id="mults" class="mults"></div>
-      <div class="row"><button type="submit">Save</button></div>
+      <div class="row"><button type="button" id="bCal" class="ghost">Calibrate levels</button><button type="submit">Save</button></div>
       <div id="mLvl" class="msg"></div>
     </form>
   </div>
@@ -136,6 +142,20 @@ input[type=text],input[type=password]{text-align:left}
   </div>
 
   <div class="row"><button id="bBack" class="ghost">Back to ride</button></div>
+</section>
+
+<section id="wiz" class="hidden">
+  <div class="card">
+    <div class="label" id="wStep"></div>
+    <h2 id="wTitle" style="margin-top:4px"></h2>
+    <p class="help" id="wText"></p>
+    <div id="wLive" class="hero">
+      <div><span id="wRpm" class="big">0</span><span class="unit">rpm</span></div>
+      <p class="help" id="wSub"></p>
+    </div>
+    <div id="wBody"></div>
+    <div class="row" id="wBtns"></div>
+  </div>
 </section>
 </main>
 
@@ -182,6 +202,7 @@ async function poll(){
     pm.className='pill '+(s.moving?'on':(s.time?'pause':''));
     const pb=$('pBle');pb.className='pill '+(s.ble?'on':'');pb.textContent=s.ble?'BLE app':'BLE';
     if(!lvBusy)markLevel(s.level);
+    wizTick(s);
     hist.push(s.speed);if(hist.length>HIST_MAX)hist.shift();draw();
   }catch(e){}
   const on=Date.now()-okAt<3000;$('pConn').textContent=on?'live':'offline';$('pConn').className='pill '+(on?'on':'');
@@ -194,11 +215,124 @@ async function loadSettings(){
   s.mult.forEach((m,i)=>$('fLvl')['m'+(i+1)].value=m);
   $('fWifi').ssid.value=s.ssid;$('ipInfo').textContent='Current IP: '+s.ip+' · also http://domyos.local';
 }
-function show(setup){$('dash').classList.toggle('hidden',setup);$('setup').classList.toggle('hidden',!setup);
-  if(setup)loadSettings();scrollTo(0,0);}
+function show(v){for(const id of ['dash','setup','wiz'])$(id).classList.toggle('hidden',id!==v);
+  if(v==='setup')loadSettings();scrollTo(0,0);}
 
-$('bSettings').onclick=()=>show(true);
-$('bBack').onclick=()=>show(false);
+// Level calibration by effort matching: ride the reference level at a steady
+// effort, then find the cadence that feels the same at every other level.
+// Equal effort = equal power, so mult = (reference rpm / level rpm)².
+const MEASURE_S=60;
+const W={on:false,ref:4,order:[],i:0,rpm:{},check:0,phase:'',p0:0,t0:0,lastP:0,res:0};
+function wBtns(list){const r=$('wBtns');r.innerHTML='';
+  for(const [t,fn,ghost] of list){const b=document.createElement('button');b.textContent=t;b.type='button';
+    if(ghost)b.className='ghost';b.onclick=fn;r.appendChild(b);}}
+function wScreen(step,title,text,live){$('wStep').textContent=step;$('wTitle').textContent=title;
+  $('wText').innerHTML=text;$('wLive').classList.toggle('hidden',!live);$('wBody').innerHTML='';$('wSub').textContent='';}
+function wQuit(){W.on=false;W.phase='';show('setup');}
+
+function wizIntro(){
+  W.on=true;W.phase='';show('wiz');
+  wScreen('Level calibration','Before you start',
+    'This sets the power multiplier of each knob level by <b>effort matching</b>. You ride the reference level at a steady effort, '+
+    'then match that same effort at every other level; the ESP32 measures your cadence each time. It takes about 25 minutes.<br><br>'+
+    '<b>Warm up for 5 minutes first.</b> A heart-rate watch helps a lot: aim for the same heart rate at every level. '+
+    'Without one, match your breathing (e.g. you can still talk in short sentences).',false);
+  let o='';for(let i=1;i<=LEVELS;i++)o+='<option'+(i===(cfg?cfg.level:4)?' selected':'')+'>'+i+'</option>';
+  $('wBody').innerHTML='<label class="f"><span>Reference level<small>the level you usually ride; it keeps the current power factor</small></span><select id="wRef">'+o+'</select></label>';
+  wBtns([['Cancel',wQuit,1],['Start',()=>{
+    W.ref=+$('wRef').value;W.rpm={};W.check=0;W.i=0;
+    W.order=[W.ref];for(let i=1;i<=LEVELS;i++)if(i!==W.ref)W.order.push(i);W.order.push('check');
+    wLevel();}]]);
+}
+
+function wLevel(){
+  const cur=W.order[W.i],L=cur==='check'?W.ref:cur,r=W.rpm[W.ref];
+  setLevel(L);
+  const step='Step '+(W.i+1)+' of '+W.order.length;
+  if(cur===W.ref)wScreen(step,'Level '+L+': set your target effort',
+    'Turn the knob to <b>'+L+'</b>. Pedal at a steady pace you could keep up for 20 minutes, around 60–75 rpm. '+
+    'Hold it for about a minute until your heart rate or breathing settles, then tap <b>Measure</b>. '+
+    'Remember this effort: it is the target for every other level.',true);
+  else if(cur==='check')wScreen(step,'Level '+L+' again: fatigue check',
+    'Turn the knob back to <b>'+L+'</b> and ride at the same target effort as at the start. '+
+    'This shows whether you got tired along the way.',true);
+  else wScreen(step,'Level '+L+': match the effort',
+    'Turn the knob to <b>'+L+'</b>. Change your pace until the effort feels the same as at level '+W.ref+
+    ' ('+Math.round(r)+' rpm there): '+(L<W.ref?'this level is lighter, so pedal <b>faster</b>':'this level is heavier, so pedal <b>slower</b>')+
+    '. Match the effort, not the cadence. Give it about a minute to settle, then tap <b>Measure</b>.',true);
+  wSettle('');
+}
+
+function wSettle(msg){
+  W.phase='settle';$('wSub').textContent=msg||'Live cadence. Tap Measure once your effort is steady.';
+  const cur=W.order[W.i],b=[['Cancel',wQuit,1]];
+  if(cur!==W.ref)b.push(['Skip level',wNext,1]);
+  b.push(['Measure',()=>{W.phase='wait';W.lastP=lastTotal;$('wSub').textContent='Waiting for the next pedal turn…';
+    wBtns([['Stop',()=>wSettle('Measurement stopped.'),1]]);}]);
+  wBtns(b);
+}
+
+function wizTick(s){
+  if(!W.on)return;
+  $('wRpm').textContent=Math.round(s.cadence);
+  const ppr=cfg?cfg.ppr:1,now=Date.now();
+  if(W.phase==='wait'&&s.totalPulses!==W.lastP){W.phase='meas';W.p0=s.totalPulses;W.t0=now;}
+  else if(W.phase==='meas'){
+    if(!s.moving){wSettle('You stopped pedalling, so the measurement was cancelled. Tap Measure to retry.');return;}
+    const el=(now-W.t0)/1000,avg=(s.totalPulses-W.p0)/ppr/el*60;
+    // Finish on a pedal turn, so whole turns are counted over the time.
+    if(el>=MEASURE_S&&s.totalPulses!==W.lastP){W.phase='done';W.res=avg;wDone();return;}
+    $('wSub').textContent='Measuring, keep it steady… '+Math.max(0,Math.ceil(MEASURE_S-el))+' s'+(el>5?' · average '+avg.toFixed(1)+' rpm':'');
+  }
+  W.lastP=s.totalPulses;
+}
+
+function wDone(){
+  $('wSub').innerHTML='Average: <b>'+W.res.toFixed(1)+' rpm</b>';
+  wBtns([['Redo',()=>wSettle(''),1],['Next',()=>{
+    const cur=W.order[W.i];if(cur==='check')W.check=W.res;else W.rpm[cur]=W.res;wNext();}]]);
+}
+
+function wNext(){W.i++;if(W.i<W.order.length)wLevel();else wResult();}
+
+function wResult(){
+  W.phase='';
+  const r0=W.rpm[W.ref],m={},est={};
+  for(let L=1;L<=LEVELS;L++)if(W.rpm[L])m[L]=(r0/W.rpm[L])**2;
+  // Fill skipped levels: log-linear between measured neighbours, or
+  // extrapolated from the two nearest on one side; else keep the old value.
+  const known=Object.keys(m).map(Number);
+  const lerp=(a,b,L)=>Math.exp(Math.log(m[a])+(Math.log(m[b])-Math.log(m[a]))*(L-a)/(b-a));
+  for(let L=1;L<=LEVELS;L++){if(m[L])continue;est[L]=1;
+    const lo=known.filter(k=>k<L),hi=known.filter(k=>k>L);
+    if(lo.length&&hi.length)m[L]=lerp(lo[lo.length-1],hi[0],L);
+    else if(lo.length>1)m[L]=lerp(lo[lo.length-2],lo[lo.length-1],L);
+    else if(hi.length>1)m[L]=lerp(hi[0],hi[1],L);
+    else m[L]=cfg.mult[L-1];}
+  let rows='';
+  for(let L=1;L<=LEVELS;L++)rows+='<tr><td>'+L+(L===W.ref?' (ref)':'')+'</td><td>'+(W.rpm[L]?W.rpm[L].toFixed(1):'–')+
+    '</td><td>'+cfg.mult[L-1].toFixed(2)+'</td><td><b>'+m[L].toFixed(2)+'</b>'+(est[L]?' <small>est.</small>':'')+'</td></tr>';
+  const notes=[];
+  if(W.check){const d=W.check/r0-1;
+    notes.push(Math.abs(d)>0.08
+      ?'⚠ Fatigue check: level '+W.ref+' was '+W.check.toFixed(1)+' rpm at the end vs '+r0.toFixed(1)+' at the start ('+(d*100).toFixed(0)+' %). '+
+       'Your effort drifted, so the later levels are off. Consider resting and redoing the calibration.'
+      :'✓ Fatigue check: level '+W.ref+' was '+W.check.toFixed(1)+' rpm at the end vs '+r0.toFixed(1)+' at the start, consistent.');}
+  for(let L=2;L<=LEVELS;L++)if(m[L]<m[L-1]){notes.push('⚠ Level '+L+' came out lighter than level '+(L-1)+'. Consider redoing those two.');break;}
+  if(Object.keys(est).length)notes.push('Levels marked est. were skipped and estimated from their neighbours.');
+  wScreen('Level calibration','Results',
+    'Multiplier = (reference rpm ÷ level rpm)². The power factor ('+cfg.powerK+') now applies to level '+W.ref+'.',false);
+  $('wBody').innerHTML='<table class="res"><tr><th>Level</th><th>rpm</th><th>Old</th><th>New</th></tr>'+rows+'</table>'+
+    notes.map(n=>'<p class="help">'+n+'</p>').join('');
+  wBtns([['Discard',wQuit,1],['Save',async()=>{
+    const b=new URLSearchParams();for(let L=1;L<=LEVELS;L++)b.set('m'+L,m[L].toFixed(3));
+    await fetch('/api/settings',{method:'POST',body:b});wQuit();
+    $('mLvl').textContent='Level calibration saved.';setTimeout(()=>$('mLvl').textContent='',4000);}]]);
+}
+
+$('bCal').onclick=wizIntro;
+$('bSettings').onclick=()=>show('setup');
+$('bBack').onclick=()=>show('dash');
 $('bReset').onclick=async()=>{if(!confirm('Start a new ride? Current values will be cleared.'))return;
   await fetch('/api/reset',{method:'POST'});hist.length=0;draw();};
 $('bZero').onclick=()=>{zeroAt=lastTotal;$('cPulses').textContent=0;};
