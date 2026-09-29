@@ -48,6 +48,11 @@ input[type=text],input[type=password]{text-align:left}
 .help{font-size:13px;color:var(--muted);margin:6px 0 0}
 .calib{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
 .msg{font-size:13px;color:var(--ok);min-height:18px;margin-top:6px}
+.lv{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;margin-top:8px}
+.lv button{padding:12px 0;background:transparent;color:var(--fg);border:1px solid var(--line);font-variant-numeric:tabular-nums}
+.lv button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.mults{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+.mults label{font-size:12px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -66,6 +71,10 @@ input[type=text],input[type=password]{text-align:left}
     <div class="label">Speed</div>
     <div><span id="speed" class="big">0.0</span><span class="unit">km/h</span></div>
     <canvas id="chart"></canvas>
+  </div>
+  <div class="card section">
+    <div class="label">Knob level</div>
+    <div id="lv" class="lv"></div>
   </div>
   <div class="grid">
     <div class="card"><div class="label">Time</div><div id="time" class="val">0:00</div></div>
@@ -96,12 +105,22 @@ input[type=text],input[type=password]{text-align:left}
     <form id="fSet">
       <label class="f"><span>Metres per revolution<small>virtual wheel size</small></span><input name="mpr" type="number" step="0.01" inputmode="decimal"></label>
       <label class="f"><span>Weight (kg)</span><input name="weight" type="number" step="0.5" inputmode="decimal"></label>
-      <label class="f"><span>Power factor<small>W = factor × rpm²; raise for more tension</small></span><input name="powerK" type="number" step="0.001" inputmode="decimal"></label>
+      <label class="f"><span>Power factor<small>W = factor × rpm² at the reference knob level</small></span><input name="powerK" type="number" step="0.001" inputmode="decimal"></label>
       <label class="f"><span>Calorie multiplier<small>scale to match the old display</small></span><input name="calF" type="number" step="0.01" inputmode="decimal"></label>
       <label class="f"><span>Pulses per revolution</span><input name="ppr" type="number" step="1" inputmode="numeric"></label>
       <label class="f"><span>Debounce (ms)<small>raise if you see extra pulses</small></span><input name="debounce" type="number" step="1" inputmode="numeric"></label>
       <div class="row"><button type="submit">Save</button></div>
       <div id="mSet" class="msg"></div>
+    </form>
+  </div>
+
+  <div class="card section">
+    <h2>Knob levels</h2>
+    <form id="fLvl">
+      <p class="help">Power multiplier for each level, relative to the reference level (1.0). Power = power factor × multiplier × rpm².</p>
+      <div id="mults" class="mults"></div>
+      <div class="row"><button type="submit">Save</button></div>
+      <div id="mLvl" class="msg"></div>
     </form>
   </div>
 
@@ -123,7 +142,15 @@ input[type=text],input[type=password]{text-align:left}
 <script>
 const $=id=>document.getElementById(id);
 const hist=[];const HIST_MAX=600; // 5 min at 2 Hz
-let zeroAt=0,lastTotal=0,okAt=0;
+let zeroAt=0,lastTotal=0,okAt=0,cfg=null,lvBusy=0;
+const LEVELS=8;
+for(let i=1;i<=LEVELS;i++){
+  const b=document.createElement('button');b.textContent=i;b.onclick=()=>setLevel(i);$('lv').appendChild(b);
+  $('mults').insertAdjacentHTML('beforeend','<label>Level '+i+'<input name="m'+i+'" type="number" step="0.01" inputmode="decimal"></label>');
+}
+function markLevel(n){[...$('lv').children].forEach((b,i)=>b.classList.toggle('on',i+1===n));}
+async function setLevel(n){markLevel(n);lvBusy++;
+  try{await fetch('/api/level',{method:'POST',body:new URLSearchParams({level:n})});}finally{lvBusy--;}}
 
 function fmtTime(s){const h=Math.floor(s/3600),m=Math.floor(s/60)%60,x=s%60;
   return (h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0');}
@@ -154,6 +181,7 @@ async function poll(){
     const pm=$('pMove');pm.textContent=s.moving?'riding':(s.time?'paused':'idle');
     pm.className='pill '+(s.moving?'on':(s.time?'pause':''));
     const pb=$('pBle');pb.className='pill '+(s.ble?'on':'');pb.textContent=s.ble?'BLE app':'BLE';
+    if(!lvBusy)markLevel(s.level);
     hist.push(s.speed);if(hist.length>HIST_MAX)hist.shift();draw();
   }catch(e){}
   const on=Date.now()-okAt<3000;$('pConn').textContent=on?'live':'offline';$('pConn').className='pill '+(on?'on':'');
@@ -161,8 +189,9 @@ async function poll(){
 }
 
 async function loadSettings(){
-  const s=await (await fetch('/api/settings')).json();const f=$('fSet');
+  const s=await (await fetch('/api/settings')).json();const f=$('fSet');cfg=s;
   for(const k of ['mpr','weight','powerK','calF','ppr','debounce'])f[k].value=s[k];
+  s.mult.forEach((m,i)=>$('fLvl')['m'+(i+1)].value=m);
   $('fWifi').ssid.value=s.ssid;$('ipInfo').textContent='Current IP: '+s.ip+' · also http://domyos.local';
 }
 function show(setup){$('dash').classList.toggle('hidden',setup);$('setup').classList.toggle('hidden',!setup);
@@ -176,6 +205,9 @@ $('bZero').onclick=()=>{zeroAt=lastTotal;$('cPulses').textContent=0;};
 $('fSet').onsubmit=async e=>{e.preventDefault();
   await fetch('/api/settings',{method:'POST',body:new URLSearchParams(new FormData(e.target))});
   $('mSet').textContent='Saved.';setTimeout(()=>$('mSet').textContent='',2000);loadSettings();};
+$('fLvl').onsubmit=async e=>{e.preventDefault();
+  await fetch('/api/settings',{method:'POST',body:new URLSearchParams(new FormData(e.target))});
+  $('mLvl').textContent='Saved.';setTimeout(()=>$('mLvl').textContent='',2000);loadSettings();};
 $('fWifi').onsubmit=async e=>{e.preventDefault();
   await fetch('/api/wifi',{method:'POST',body:new URLSearchParams(new FormData(e.target))});
   $('mWifi').textContent='Saved. Restarting — reconnect to the new network.';};
