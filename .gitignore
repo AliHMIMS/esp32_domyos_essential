@@ -1,0 +1,4 @@
+.pio/
+.vscode/
+secrets.ini
+include/secrets.h
