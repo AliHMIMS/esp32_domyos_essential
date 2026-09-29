@@ -218,86 +218,96 @@ async function loadSettings(){
 function show(v){for(const id of ['dash','setup','wiz'])$(id).classList.toggle('hidden',id!==v);
   if(v==='setup')loadSettings();scrollTo(0,0);}
 
-// Level calibration by effort matching: ride the reference level at a steady
-// effort, then find the cadence that feels the same at every other level.
-// Equal effort = equal power, so mult = (reference rpm / level rpm)².
-const MEASURE_S=60;
-const W={on:false,ref:4,order:[],i:0,rpm:{},check:0,phase:'',p0:0,t0:0,lastP:0,res:0};
+// Level calibration by effort matching, hands-free: after Start the page runs
+// levels 1..8 on a timer and cues each knob change (beeps, vibration, voice).
+// The rider keeps the same effort throughout; equal effort = equal power, so
+// mult = (level 1 rpm / level rpm)², then scaled so the reference level is 1.0.
+const TURN_S=10,SETTLE1_S=90,SETTLE_S=45,RETRY_S=20,MEASURE_S=60;
+const W={on:false,run:false,ref:4,order:[],i:0,rpm:{},check:0,phase:'',until:0,p0:0,t0:0,lastP:0,beeped:0};
+let actx=null;
 function wBtns(list){const r=$('wBtns');r.innerHTML='';
   for(const [t,fn,ghost] of list){const b=document.createElement('button');b.textContent=t;b.type='button';
     if(ghost)b.className='ghost';b.onclick=fn;r.appendChild(b);}}
 function wScreen(step,title,text,live){$('wStep').textContent=step;$('wTitle').textContent=title;
   $('wText').innerHTML=text;$('wLive').classList.toggle('hidden',!live);$('wBody').innerHTML='';$('wSub').textContent='';}
-function wQuit(){W.on=false;W.phase='';show('setup');}
+function wQuit(){W.on=W.run=false;W.phase='';try{speechSynthesis.cancel();}catch(e){}show('setup');}
+function beep(n,ms,hz){if(!actx)return;for(let k=0;k<n;k++){const o=actx.createOscillator(),g=actx.createGain(),t=actx.currentTime+k*(ms+120)/1000;
+  o.frequency.value=hz||880;g.gain.setValueAtTime(.25,t);g.gain.setValueAtTime(0,t+ms/1000);o.connect(g);g.connect(actx.destination);o.start(t);o.stop(t+ms/1000);}}
+function say(t){try{speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(t));}catch(e){}}
+function cue(n,text){beep(n,180);try{navigator.vibrate(n>1?[200,100,200]:200);}catch(e){}if(text)setTimeout(()=>say(text),n*300);}
 
 function wizIntro(){
-  W.on=true;W.phase='';show('wiz');
+  W.on=true;W.run=false;W.phase='';show('wiz');
   wScreen('Level calibration','Before you start',
-    'This sets the power multiplier of each knob level by <b>effort matching</b>. You ride the reference level at a steady effort, '+
-    'then match that same effort at every other level; the ESP32 measures your cadence each time. It takes about 25 minutes.<br><br>'+
-    '<b>Warm up for 5 minutes first.</b> A heart-rate watch helps a lot: aim for the same heart rate at every level. '+
-    'Without one, match your breathing (e.g. you can still talk in short sentences).',false);
+    'This sets the power multiplier of each knob level by <b>effort matching</b>. You ride all 8 levels at the <b>same effort</b>, '+
+    'pedalling faster on light levels and slower on heavy ones; the ESP32 measures your cadence at each. '+
+    'After <b>Start</b> it runs by itself (about 18 minutes): a beep and a voice tell you when to turn the knob up.<br><br>'+
+    '<b>Warm up for 5 minutes first</b>, turn the sound up and keep the screen on. '+
+    'Choose a moderate effort you could also hold on level 8 by pedalling slowly; about 80–90 rpm on level 1 usually works. '+
+    'A heart-rate watch helps a lot: keep the same heart rate the whole time. Without one, keep the same breathing.',false);
   let o='';for(let i=1;i<=LEVELS;i++)o+='<option'+(i===(cfg?cfg.level:4)?' selected':'')+'>'+i+'</option>';
-  $('wBody').innerHTML='<label class="f"><span>Reference level<small>the level you usually ride; it keeps the current power factor</small></span><select id="wRef">'+o+'</select></label>';
-  wBtns([['Cancel',wQuit,1],['Start',()=>{
+  $('wBody').innerHTML='<label class="f"><span>Reference level<small>the level you usually ride; it keeps multiplier 1.0 and the current power factor</small></span><select id="wRef">'+o+'</select></label>';
+  wBtns([['Cancel',wQuit,1],['Start on level 1',()=>{
+    // Audio must be unlocked by this tap.
+    try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();actx.resume();}catch(e){}
+    try{navigator.wakeLock&&navigator.wakeLock.request('screen').catch(()=>{});}catch(e){}
     W.ref=+$('wRef').value;W.rpm={};W.check=0;W.i=0;
-    W.order=[W.ref];for(let i=1;i<=LEVELS;i++)if(i!==W.ref)W.order.push(i);W.order.push('check');
-    wLevel();}]]);
+    W.order=[1,2,3,4,5,6,7,8,'check'];W.run=true;
+    wLevel(true);}]]);
 }
 
-function wLevel(){
-  const cur=W.order[W.i],L=cur==='check'?W.ref:cur,r=W.rpm[W.ref];
+function wLevel(first){
+  const cur=W.order[W.i],L=cur==='check'?1:cur,r1=W.rpm[1];
   setLevel(L);
   const step='Step '+(W.i+1)+' of '+W.order.length;
-  if(cur===W.ref)wScreen(step,'Level '+L+': set your target effort',
-    'Turn the knob to <b>'+L+'</b>. Pedal at a steady pace you could keep up for 20 minutes, around 60–75 rpm. '+
-    'Hold it for about a minute until your heart rate or breathing settles, then tap <b>Measure</b>. '+
-    'Remember this effort: it is the target for every other level.',true);
-  else if(cur==='check')wScreen(step,'Level '+L+' again: fatigue check',
-    'Turn the knob back to <b>'+L+'</b> and ride at the same target effort as at the start. '+
-    'This shows whether you got tired along the way.',true);
-  else wScreen(step,'Level '+L+': match the effort',
-    'Turn the knob to <b>'+L+'</b>. Change your pace until the effort feels the same as at level '+W.ref+
-    ' ('+Math.round(r)+' rpm there): '+(L<W.ref?'this level is lighter, so pedal <b>faster</b>':'this level is heavier, so pedal <b>slower</b>')+
-    '. Match the effort, not the cadence. Give it about a minute to settle, then tap <b>Measure</b>.',true);
-  wSettle('');
+  if(cur===1)wScreen(step,'Level 1: find your effort',
+    'Pedal at a steady, moderate effort (about 80–90 rpm). Settle into it: this effort is the target for every level.',true);
+  else if(cur==='check')wScreen(step,'Back to level 1: fatigue check',
+    'Turn the knob back to <b>1</b> and keep the same effort. This shows whether you got tired along the way'+
+    (r1?' (it was '+Math.round(r1)+' rpm at the start).':'.'),true);
+  else wScreen(step,'Level '+L,
+    'Turn the knob to <b>'+L+'</b> and keep the <b>same effort</b>: it is heavier, so pedal slower. Match the effort, not the cadence'+
+    (r1?' (level 1 was '+Math.round(r1)+' rpm).':'.'),true);
+  if(first){wPhase('settle',SETTLE1_S);cue(1,'Level 1. Find a steady moderate effort.');}
+  else{wPhase('turn',TURN_S);cue(2,cur==='check'?'Turn back to level 1':'Turn to level '+L);}
+  wRunBtns();
 }
 
-function wSettle(msg){
-  W.phase='settle';$('wSub').textContent=msg||'Live cadence. Tap Measure once your effort is steady.';
-  const cur=W.order[W.i],b=[['Cancel',wQuit,1]];
-  if(cur!==W.ref)b.push(['Skip level',wNext,1]);
-  b.push(['Measure',()=>{W.phase='wait';W.lastP=lastTotal;$('wSub').textContent='Waiting for the next pedal turn…';
-    wBtns([['Stop',()=>wSettle('Measurement stopped.'),1]]);}]);
+function wRunBtns(){
+  const b=[['Stop',wQuit,1]];
+  if(W.order[W.i]!==1)b.push(['Skip level',()=>{W.i++;wAdvance();},1]);
+  b.push(W.run?['Pause',()=>{W.run=false;W.phase='paused';$('wSub').textContent='Paused. Resume restarts this level.';try{speechSynthesis.cancel();}catch(e){}wRunBtns();}]
+              :['Resume',()=>{W.run=true;wPhase('settle',W.order[W.i]===1?SETTLE1_S:SETTLE_S);wRunBtns();}]);
   wBtns(b);
 }
+
+function wPhase(p,s){W.phase=p;W.until=Date.now()+s*1000;W.beeped=0;}
+function wAdvance(){if(W.i<W.order.length)wLevel(false);else wResult();}
 
 function wizTick(s){
   if(!W.on)return;
   $('wRpm').textContent=Math.round(s.cadence);
-  const ppr=cfg?cfg.ppr:1,now=Date.now();
-  if(W.phase==='wait'&&s.totalPulses!==W.lastP){W.phase='meas';W.p0=s.totalPulses;W.t0=now;}
-  else if(W.phase==='meas'){
-    if(!s.moving){wSettle('You stopped pedalling, so the measurement was cancelled. Tap Measure to retry.');return;}
-    const el=(now-W.t0)/1000,avg=(s.totalPulses-W.p0)/ppr/el*60;
-    // Finish on a pedal turn, so whole turns are counted over the time.
-    if(el>=MEASURE_S&&s.totalPulses!==W.lastP){W.phase='done';W.res=avg;wDone();return;}
-    $('wSub').textContent='Measuring, keep it steady… '+Math.max(0,Math.ceil(MEASURE_S-el))+' s'+(el>5?' · average '+avg.toFixed(1)+' rpm':'');
-  }
+  if(!W.run){W.lastP=s.totalPulses;return;}
+  const ppr=cfg?cfg.ppr:1,now=Date.now(),left=Math.max(0,Math.ceil((W.until-now)/1000)),pulse=s.totalPulses!==W.lastP;
   W.lastP=s.totalPulses;
+  if(W.phase==='turn'){$('wSub').textContent='Turn the knob now… '+left+' s';if(left<=0)wPhase('settle',SETTLE_S);}
+  else if(W.phase==='settle'){$('wSub').textContent='Settle into the effort… measuring in '+left+' s';
+    if(left<=0)W.phase='wait';}
+  else if(W.phase==='wait'){$('wSub').textContent=s.moving?'Starting measurement…':'Keep pedalling…';
+    // Start on a pedal turn, so whole turns are counted.
+    if(pulse&&s.moving){W.phase='meas';W.p0=s.totalPulses;W.t0=now;W.beeped=0;beep(1,120,660);}}
+  else if(W.phase==='meas'){
+    if(!s.moving){wPhase('settle',RETRY_S);cue(1,'Keep pedalling. Measuring this level again.');return;}
+    const el=(now-W.t0)/1000,avg=(s.totalPulses-W.p0)/ppr/el*60,rem=Math.ceil(MEASURE_S-el);
+    if(rem<=3&&rem>=1&&W.beeped!==rem){W.beeped=rem;beep(1,80,660);}
+    if(el>=MEASURE_S&&pulse){const cur=W.order[W.i];if(cur==='check')W.check=avg;else W.rpm[cur]=avg;W.i++;wAdvance();return;}
+    $('wSub').textContent='Measuring, hold it steady… '+Math.max(0,rem)+' s'+(el>5?' · average '+avg.toFixed(1)+' rpm':'');
+  }
 }
-
-function wDone(){
-  $('wSub').innerHTML='Average: <b>'+W.res.toFixed(1)+' rpm</b>';
-  wBtns([['Redo',()=>wSettle(''),1],['Next',()=>{
-    const cur=W.order[W.i];if(cur==='check')W.check=W.res;else W.rpm[cur]=W.res;wNext();}]]);
-}
-
-function wNext(){W.i++;if(W.i<W.order.length)wLevel();else wResult();}
 
 function wResult(){
-  W.phase='';
-  const r0=W.rpm[W.ref],m={},est={};
+  W.phase='';W.run=false;cue(3,'Calibration done. You can stop.');
+  const r0=W.rpm[1],m={},est={};
   for(let L=1;L<=LEVELS;L++)if(W.rpm[L])m[L]=(r0/W.rpm[L])**2;
   // Fill skipped levels: log-linear between measured neighbours, or
   // extrapolated from the two nearest on one side; else keep the old value.
@@ -308,20 +318,21 @@ function wResult(){
     if(lo.length&&hi.length)m[L]=lerp(lo[lo.length-1],hi[0],L);
     else if(lo.length>1)m[L]=lerp(lo[lo.length-2],lo[lo.length-1],L);
     else if(hi.length>1)m[L]=lerp(hi[0],hi[1],L);
-    else m[L]=cfg.mult[L-1];}
+    else m[L]=cfg.mult[L-1]/cfg.mult[0];}
+  const k=m[W.ref];for(let L=1;L<=LEVELS;L++)m[L]/=k;
   let rows='';
   for(let L=1;L<=LEVELS;L++)rows+='<tr><td>'+L+(L===W.ref?' (ref)':'')+'</td><td>'+(W.rpm[L]?W.rpm[L].toFixed(1):'–')+
     '</td><td>'+cfg.mult[L-1].toFixed(2)+'</td><td><b>'+m[L].toFixed(2)+'</b>'+(est[L]?' <small>est.</small>':'')+'</td></tr>';
   const notes=[];
   if(W.check){const d=W.check/r0-1;
     notes.push(Math.abs(d)>0.08
-      ?'⚠ Fatigue check: level '+W.ref+' was '+W.check.toFixed(1)+' rpm at the end vs '+r0.toFixed(1)+' at the start ('+(d*100).toFixed(0)+' %). '+
+      ?'⚠ Fatigue check: level 1 was '+W.check.toFixed(1)+' rpm at the end vs '+r0.toFixed(1)+' at the start ('+(d*100).toFixed(0)+' %). '+
        'Your effort drifted, so the later levels are off. Consider resting and redoing the calibration.'
-      :'✓ Fatigue check: level '+W.ref+' was '+W.check.toFixed(1)+' rpm at the end vs '+r0.toFixed(1)+' at the start, consistent.');}
+      :'✓ Fatigue check: level 1 was '+W.check.toFixed(1)+' rpm at the end vs '+r0.toFixed(1)+' at the start, consistent.');}
   for(let L=2;L<=LEVELS;L++)if(m[L]<m[L-1]){notes.push('⚠ Level '+L+' came out lighter than level '+(L-1)+'. Consider redoing those two.');break;}
   if(Object.keys(est).length)notes.push('Levels marked est. were skipped and estimated from their neighbours.');
   wScreen('Level calibration','Results',
-    'Multiplier = (reference rpm ÷ level rpm)². The power factor ('+cfg.powerK+') now applies to level '+W.ref+'.',false);
+    'Multiplier = (level 1 rpm ÷ level rpm)², scaled so level '+W.ref+' is 1.0. The power factor ('+cfg.powerK+') applies to level '+W.ref+'.',false);
   $('wBody').innerHTML='<table class="res"><tr><th>Level</th><th>rpm</th><th>Old</th><th>New</th></tr>'+rows+'</table>'+
     notes.map(n=>'<p class="help">'+n+'</p>').join('');
   wBtns([['Discard',wQuit,1],['Save',async()=>{
