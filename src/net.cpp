@@ -50,25 +50,32 @@ static void handleState() {
   snprintf(buf, sizeof(buf),
            "{\"speed\":%.2f,\"cadence\":%.1f,\"power\":%.0f,"
            "\"distance\":%.3f,\"kcal\":%.1f,\"time\":%lu,\"moving\":%s,"
-           "\"pulses\":%lu,\"totalPulses\":%lu,\"ble\":%s,\"rssi\":%d}",
+           "\"pulses\":%lu,\"totalPulses\":%lu,\"ble\":%s,\"rssi\":%d,"
+           "\"level\":%u}",
            s.speedKmh, s.cadenceRpm, s.powerW, s.distanceKm, s.kcal,
            (unsigned long)s.elapsedS, s.moving ? "true" : "false",
            (unsigned long)s.sessionPulses, (unsigned long)s.totalPulses,
            ftms::connected() ? "true" : "false",
-           WiFi.isConnected() ? WiFi.RSSI() : 0);
+           WiFi.isConnected() ? WiFi.RSSI() : 0, settings.level);
   sendJson(buf);
 }
 
 static void handleGetSettings() {
-  char buf[320];
+  char mult[96];
+  char* p = mult;
+  for (int i = 0; i < Settings::LEVELS; i++) {
+    p += snprintf(p, mult + sizeof(mult) - p, "%s%.3f", i ? "," : "",
+                  settings.levelMult[i]);
+  }
+  char buf[448];
   snprintf(buf, sizeof(buf),
            "{\"mpr\":%.3f,\"weight\":%.1f,\"powerK\":%.4f,\"calF\":%.3f,"
-           "\"ppr\":%u,\"debounce\":%u,\"ssid\":\"%s\",\"ip\":\"%s\","
-           "\"build\":\"%s %s\"}",
+           "\"ppr\":%u,\"debounce\":%u,\"level\":%u,\"mult\":[%s],"
+           "\"ssid\":\"%s\",\"ip\":\"%s\",\"build\":\"%s %s\"}",
            settings.metersPerRev, settings.weightKg, settings.powerK,
            settings.calFactor, settings.pulsesPerRev, settings.debounceMs,
-           settings.wifiSsid.c_str(), WiFi.localIP().toString().c_str(),
-           __DATE__, __TIME__);
+           settings.level, mult, settings.wifiSsid.c_str(),
+           WiFi.localIP().toString().c_str(), __DATE__, __TIME__);
   sendJson(buf);
 }
 
@@ -87,8 +94,23 @@ static void handlePostSettings() {
       (uint8_t)argFloat("ppr", settings.pulsesPerRev, 1, 20);
   settings.debounceMs =
       (uint16_t)argFloat("debounce", settings.debounceMs, 5, 500);
+  // Level multipliers arrive as m1..m8.
+  for (int i = 0; i < Settings::LEVELS; i++) {
+    char name[4];
+    snprintf(name, sizeof(name), "m%d", i + 1);
+    settings.levelMult[i] = argFloat(name, settings.levelMult[i], 0.05f, 20);
+  }
   settings.save();
   handleGetSettings();
+}
+
+static void handleLevel() {
+  settings.level =
+      (uint8_t)argFloat("level", settings.level, 1, Settings::LEVELS);
+  settings.saveLevel();
+  char buf[32];
+  snprintf(buf, sizeof(buf), "{\"level\":%u}", settings.level);
+  sendJson(buf);
 }
 
 static void handleWifi() {
@@ -170,6 +192,7 @@ void begin(const char* hostname) {
   server.on("/api/settings", HTTP_POST, handlePostSettings);
   server.on("/api/wifi", HTTP_POST, handleWifi);
   server.on("/api/reset", HTTP_POST, handleReset);
+  server.on("/api/level", HTTP_POST, handleLevel);
   server.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
   server.onNotFound([] {
     // Send hotspot clients (captive-portal checks) to the UI.
