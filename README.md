@@ -7,7 +7,7 @@ UI plus Bluetooth FTMS for training apps.
 
 1. [Identifying the sensor signal](docs/1-identify-signal.md): what the jack carries, and how it was measured
 2. [Setting up at the bike](docs/2-at-the-bike.md): wiring, power, phone, pulse check, Bluetooth apps, troubleshooting
-3. [Calibrating against the old display](docs/3-calibration.md): speed, distance and calories
+3. [Calibrating against the old display](docs/3-calibration.md): speed, distance, calories and knob levels
 
 ## Wiring
 
@@ -30,6 +30,11 @@ Optional: 10 kΩ GPIO2→3V3 and 100 nF GPIO2→GND for a cleaner signal.
 Speed, distance and calories use the constants in the Settings page
 (metres per revolution, weight, power factor, calorie multiplier); they are
 stored on the board.
+
+The bike can't report its tension knob, so select the level (1–8) on the
+dashboard when you turn it. It scales the power and calorie estimates, and is
+sent to Bluetooth apps as the resistance level. **Settings → Knob levels →
+Calibrate levels** walks you through calibrating each level.
 
 ## Building
 

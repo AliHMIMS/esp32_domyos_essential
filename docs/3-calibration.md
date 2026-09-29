@@ -3,19 +3,20 @@
 The old display calculates speed, distance and calories from the same pedal
 pulses as the ESP32, using fixed constants of its own. Calibration finds those
 constants so both show the same numbers. All values are entered in the web UI
-under **Settings → Bike & rider** and are saved on the board.
+under **Settings** and are saved on the board.
 
 | Setting | Default | What it controls |
 |---|---|---|
 | Metres per revolution | 5.0 | speed and distance (60 rpm = 18 km/h) |
 | Weight (kg) | 70 | calories |
-| Power factor | 0.020 | estimated power: W = factor × rpm² |
+| Power factor | 0.020 | estimated power at the reference knob level: W = factor × rpm² |
 | Calorie multiplier | 1.0 | final scaling of calories |
 | Pulses per revolution | 1 | magnet passes per pedal turn (measured: 1) |
 | Debounce (ms) | 60 | ignores contact bounce shorter than this |
+| Level multipliers | 0.55 … 2.22 | power at each knob level, relative to the reference level (section C) |
 
 Do the steps **in order**: calories depend on speed, so fix speed and distance
-first.
+first, then calories, then the knob levels.
 
 You need the old display, a way to swap the bike cable between the old display
 and the ESP32, and ideally a **metronome app** on your phone to hold a steady
@@ -68,9 +69,10 @@ show the same speed the old display did, within about 0.3 km/h.
 ## B. Calories (calorie multiplier)
 
 The old display can't know the tension knob setting (it only sees pulses), so
-its calories depend on speed and time only. The ESP32's estimate works the same
-way, from cadence and your weight. So a single multiplier is enough to match the
-old display.
+its calories depend on speed and time only. The ESP32 also uses the knob level
+you select, so the two can only match at one level: do this section at your
+**reference level** (the level you usually ride, 4 by default), whose
+multiplier is 1.0. Section C then scales the other levels from it.
 
 Do speed and distance (section A) first, so both rides really are at the same
 pace.
@@ -78,7 +80,7 @@ pace.
 ### Step 1: ride on the old display
 
 1. Plug the bike cable into the **old display** and reset it to 0.
-2. Set the tension knob to your usual setting and **note it**.
+2. Set the tension knob to your reference level.
 3. Set the metronome to your usual cadence, e.g. **70 bpm**, and pedal one turn
    per beat for exactly **10 minutes**.
 4. Write down:
@@ -91,7 +93,8 @@ pace.
 
 1. Plug the bike cable into the **ESP32**.
 2. In the web UI, tap **New ride**.
-3. Same tension knob setting, same metronome cadence, for exactly **10 minutes**.
+3. Same tension knob level, selected under **Knob level** on the dashboard too,
+   and the same metronome cadence, for exactly **10 minutes**.
    The web UI's **Time** must show 10:00 (it pauses when you stop pedalling).
 4. Check that the **distance** is close to the old display's. If it isn't, redo
    section A first.
@@ -136,7 +139,7 @@ scales everything evenly.
 For reference, the firmware calculates (in `src/bike.cpp`):
 
 ```
-power (W)        = power factor × rpm²
+power (W)        = power factor × level multiplier × rpm²
 oxygen use       = 7 + 10.8 × power ÷ weight        (ml per kg per minute)
 kcal per minute  = oxygen use × weight ÷ 1000 × 5   (1 litre O₂ ≈ 5 kcal)
 calories         = sum of kcal per minute × calorie multiplier, while moving
@@ -145,9 +148,58 @@ calories         = sum of kcal per minute × calorie multiplier, while moving
 The oxygen formula is the ACSM equation for leg cycle ergometry. The resting
 share (the `7`) is included, as on most fitness displays.
 
-Neither the old display nor the ESP32 knows the real resistance, so both are
-estimates. Matching them makes the numbers consistent with your history; it
+Neither the old display nor the ESP32 measures the real resistance, so both
+are estimates. Matching them makes the numbers consistent with your history; it
 doesn't make them exact.
+
+---
+
+## C. Knob levels (level multipliers)
+
+The tension knob has 8 levels. The bike can't report which level is set, so you
+choose it on the dashboard (**Knob level** 1–8) whenever you turn the knob.
+Bluetooth apps receive it too, as the FTMS resistance level. Each level has a
+power multiplier:
+
+```
+power (W) = power factor × level multiplier × rpm²
+```
+
+The reference level has multiplier 1.0 and uses the power factor from section B
+unchanged. Until you calibrate, the multipliers are a guess (0.55 at level 1 up
+to 2.22 at level 8, reference level 4).
+
+The bike has a freewheel, so the ESP32 can't measure the brake directly. The
+wizard uses **effort matching** instead: the same effort means the same power,
+so if level 4 at 70 rpm feels as hard as level 6 at 57 rpm, level 6's
+multiplier is (70 ÷ 57)² = 1.51.
+
+### Running the wizard (about 25 minutes)
+
+1. Warm up for 5 minutes. A heart-rate watch helps a lot: aim for the same
+   heart rate at every level. Without one, match your breathing.
+2. Open **Settings → Knob levels → Calibrate levels**.
+3. Pick the **reference level**: the level you usually ride, and the one you
+   used for the calories in section B. Tap **Start**.
+4. For each step, turn the knob to the level shown (the wizard selects it in
+   the UI for you), settle for about a minute, then tap **Measure**. Hold
+   the pace for 60 seconds. If you stop pedalling, the measurement is
+   cancelled and you can retry.
+   - **First step:** ride the reference level at a steady pace you could
+     keep up for 20 minutes (around 60–75 rpm). That effort is the target.
+   - **Every other level:** change your pace until it feels the same:
+     faster on lighter levels, slower on heavier ones. Match the effort, not
+     the cadence. If a level can't be matched (e.g. level 1 would need a pace
+     you can't hold), tap **Skip level**. It will be estimated from its
+     neighbours.
+   - **Last step:** the reference level again. This fatigue check shows
+     whether your effort drifted over the session.
+5. Check the results table and tap **Save**, or **Discard**.
+
+If the results warn that the fatigue check is off by more than 8 %, or that
+a heavier level came out lighter than the one below it, rest and redo the
+calibration (or just the levels concerned). You can also edit any
+multiplier by hand under **Settings → Knob levels**.
 
 ---
 
@@ -155,6 +207,6 @@ doesn't make them exact.
 
 Keep the values you end up with here, so they can be restored after a reset:
 
-| Date | Metres per rev | Weight | Power factor | Calorie multiplier | Notes |
-|---|---|---|---|---|---|
-| 2026-09-29 | 5.0 | 70 | 0.020 | 1.0 | defaults, not calibrated yet |
+| Date | Metres per rev | Weight | Power factor | Calorie multiplier | Level multipliers 1–8 (ref) | Notes |
+|---|---|---|---|---|---|---|
+| 2026-09-29 | 5.0 | 70 | 0.020 | 1.0 | 0.55 0.67 0.82 1.00 1.22 1.49 1.82 2.22 (4) | defaults, not calibrated yet |
